@@ -549,15 +549,17 @@ int Server::CommandLoop(const char *overview[])
 
 	ISIT("NEWGROUPS")				// RFC 977
 	{
-	    // NEWGROUPS <YYMMDD> <HHMMSS> [GMT] [<distributions>]
-	    if ( strlen(arg1) != 6 || strlen(arg2) != 6 )
+	    // NEWGROUPS <[YY]YYMMDD> <HHMMSS> [GMT] [<distributions>]
+	    if ( (strlen(arg1) != 6 && strlen(arg1) != 8) || strlen(arg2) != 6 )
 	    {
 	        Send("501 Bad or missing date/time arguments");
 		continue;
 	    }
 
+        // TODO Correct error occuring
 	    int year, mon, day, hour, min, sec;
-	    if ( sscanf(arg1, "%2d%2d%2d", &year, &mon, &day) != 3 ||
+	    if ( (sscanf(arg1, "%2d%2d%2d", &year, &mon, &day) != 3 ||
+	         sscanf(arg1, "%4d%2d%2d", &year, &mon, &day) != 3) ||
 	         sscanf(arg2, "%2d%2d%2d", &hour, &min, &sec) != 3 )
 	    {
 	        Send("501 Bad date/time argument");
@@ -565,33 +567,74 @@ int Server::CommandLoop(const char *overview[])
 	    }
 
 	    // TBD
-	    //     1) TRANSLATE YY -> YYYY
+	    //     1) TRANSLATE YY -> YYYY - NOT MANDATORY, CHECK `man 3 strptime`
+        //        FOR MORE INFORMATION ('%y' FORMAT PARAMETER)
 	    //     2) TRANSLATE TIMES INTO A time() VALUE
 	    //     3) COMPARE TIME TO GROUP'S CTIME
 	    //
-	
+
+        // Get time input
+        char *inputTime = (char *) malloc(14 * sizeof (char));
+        if (NULL == inputTime)
+        {
+            Send("501 Server error");
+            continue;
+        }
+
+        strcpy(inputTime, arg1);
+        strcat(inputTime, arg2);
+
+        // convert input time to time() compatible value
+        struct tm formattedTime;
+        memset(&formattedTime, 0, sizeof(struct tm));
+
+        char *res;
+
+        if (strlen(arg1) == 8)
+            res = strptime(inputTime, "%Y%m%d%H%M%S", &formattedTime);
+        else
+            res = strptime(inputTime, "%y%m%d%H%M%S", &formattedTime);
+
+
+        // Free previously allocated input time string
+        free(inputTime);
+
+        if (NULL == res)
+        {
+            Send("501 Bad date/time argument");
+        continue;
+        }
+
+        // Convert struct tm to UNIX epoch timestamp
+        time_t checktime = mktime(&formattedTime);
+        if (-1 == checktime)
+        {
+            Send("501 Bad date/time argument");
+            continue;
+        }
+
+        // DEBUG : Log produced timestamp
+        std::stringstream stime;
+        stime << checktime;
+
+        G_conf.LogMessage(L_DEBUG, stime.str().c_str());
+
+        // Check every groups
 	    vector<string> groupnames;
 	    AllGroups(groupnames, NULL);
 
 	    Send("231 list of new newsgroups follows");
 
-	    for ( unsigned t=0; t<groupnames.size(); t++ )
-	    {
-		Group tgroup;
-		if ( tgroup.Load(groupnames[t].c_str()) < 0 )
-		    { continue; }
-		Send(tgroup.Name());
-	    }
-	    Send(".");		// for now, nothing matches
-	    continue;
-	    
-/**** TBD
-		if ( tgroup.Ctime() > checktime )
-		    { Send(tgroup.Name()); }
-	    }
-	    Send(".");
-	    continue;
-********/
+        for ( unsigned t=0; t<groupnames.size(); t++ )
+        {
+            Group tgroup;
+            if ( tgroup.Load(groupnames[t].c_str()) < 0 )
+            { continue; }
+            if ( tgroup.Ctime() > checktime )
+            { Send(tgroup.Name()); }
+        }
+        Send(".");		// for now, nothing matches
+        continue;
 	}
 
 	ISIT("NEWNEWS")				// RFC 977
