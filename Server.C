@@ -104,6 +104,76 @@ void BreakLineToFP(FILE *fp,
     }
 }
 
+long ParseDate(const char *date, const char *time)
+{
+    // Log arguments to debug console
+    char logMessage[LINE_LEN];
+
+    sprintf(logMessage, (char *) "[DEBUG] ParseDate: got %s - %s", date, time);
+    G_conf.LogMessage(L_DEBUG, logMessage);
+
+    // Parse date input
+    int year, mon, day, hour, min, sec;
+    if (strlen(date) == 6) {
+        if ( sscanf(date, "%2d%2d%2d", &year, &mon, &day) != 3 ||
+             sscanf(time, "%2d%2d%2d", &hour, &min, &sec) != 3 )
+        {
+            G_conf.LogMessage(L_DEBUG, "[ERROR] ParseDate: invalid 6-length date parsing");
+            return -1L;
+        }
+    }
+    else {
+        if ( sscanf(date, "%4d%2d%2d", &year, &mon, &day) != 3 ||
+             sscanf(time, "%2d%2d%2d", &hour, &min, &sec) != 3 )
+        {
+            G_conf.LogMessage(L_DEBUG, "[ERROR] ParseDate: invalid 8-length date parsing");
+            return -1L;
+        }
+    }
+
+    // Get time input
+    char inputTime[14] = { 0 };
+
+    // Concatenate input in inputTime var
+    strcpy(inputTime, date);
+    strncat(inputTime, time, 6);
+
+    // DEBUG : Log concatenation
+    sprintf(logMessage, (char *) "[DEBUG] ParseDate: inputTime - %s", inputTime);
+    G_conf.LogMessage(L_DEBUG, logMessage);
+
+    // convert input time to time() compatible value
+    struct tm formattedTime;
+    memset(&formattedTime, 0, sizeof(struct tm));
+
+    char *res;
+
+    if (strlen(date) == 8)
+        res = strptime(inputTime, "%Y%m%d%H%M%S", &formattedTime);
+    else
+        res = strptime(inputTime, "%y%m%d%H%M%S", &formattedTime);
+
+    if (NULL == res)
+    {
+        G_conf.LogMessage(L_DEBUG, "[ERROR] ParseDate: strptime() failed");
+        return -1L;
+    }
+
+    // Convert struct tm to UNIX epoch timestamp
+    time_t checktime = mktime(&formattedTime);
+    if (-1 == checktime)
+    {
+        G_conf.LogMessage(L_DEBUG, "[ERROR] ParseDate: mktime() failed");
+        return -1L;
+    }
+
+    // DEBUG : Log produced timestamp
+    sprintf(logMessage, (char *) "[SUCCESS] ParseDate: parsed timestamp - %ld", checktime);
+    G_conf.LogMessage(L_DEBUG, logMessage);
+
+    return checktime;
+}
+
 void AllGroups(vector<string>& groupnames, const char *subdir)
 {
     DIR *dir;
@@ -189,6 +259,7 @@ int Server::CommandLoop(const char *overview[])
 	 cmd[LINE_LEN+1],
 	 arg1[LINE_LEN+1],
 	 arg2[LINE_LEN+1],
+	 arg3[LINE_LEN+1],
 	 reply[LINE_LEN];
 
     Send("200 newsd news server ready - posting ok");
@@ -226,8 +297,8 @@ int Server::CommandLoop(const char *overview[])
 
 	G_conf.LogMessage(L_INFO, "GOT: %s", s);
 
-	arg1[0] = arg2[0] = 0;
-	if ( sscanf(s, "%s%s%s", cmd, arg1, arg2) < 1 )
+	arg1[0] = arg2[0] = arg3[0] = 0;
+	if ( sscanf(s, "%s%s%s%s", cmd, arg1, arg2, arg3) < 1 )
 	    { continue; }
 
 	ISIT("CHECK")			// TRANSPORT EXTENSION -- RFC 2980
@@ -534,7 +605,7 @@ int Server::CommandLoop(const char *overview[])
 	         "GROUP newsgroup\r\n"
 	         "HELP\r\n"
 	         "NEWGROUPS [YY]yymmdd hhmmss [GMT|UTC] [distributions]\r\n"
-	         "NEWNEWS\r\n"
+	         "NEWNEWS wildmat [YY]yymmss hhmmss [GMT]\r\n"
 	         "NEXT\r\n"
 	         "HEAD [msg#|<msgid>]\r\n"
 	         "BODY [msg#|<msgid>]\r\n"
@@ -557,69 +628,12 @@ int Server::CommandLoop(const char *overview[])
 	    }
 
         // Parse date input
-	    int year, mon, day, hour, min, sec;
-        if (strlen(arg1) == 6) {
-            if ( sscanf(arg1, "%2d%2d%2d", &year, &mon, &day) != 3 ||
-                 sscanf(arg2, "%2d%2d%2d", &hour, &min, &sec) != 3 )
-            {
-                Send("501 Bad date/time argument");
-            continue;
-            }
-        }
-        else {
-            if ( sscanf(arg1, "%4d%2d%2d", &year, &mon, &day) != 3 ||
-                 sscanf(arg2, "%2d%2d%2d", &hour, &min, &sec) != 3 )
-            {
-                Send("501 Bad date/time argument");
-            continue;
-            }
-        }
-
-        // Get time input
-        char *inputTime = (char *) malloc(14 * sizeof (char));
-        if (NULL == inputTime)
+	    long checktime = ParseDate(arg1, arg2);
+        if (-1L == checktime)
         {
-            Send("501 Server error");
-            continue;
-        }
-
-        strcpy(inputTime, arg1);
-        strcat(inputTime, arg2);
-
-        // convert input time to time() compatible value
-        struct tm formattedTime;
-        memset(&formattedTime, 0, sizeof(struct tm));
-
-        char *res;
-
-        if (strlen(arg1) == 8)
-            res = strptime(inputTime, "%Y%m%d%H%M%S", &formattedTime);
-        else
-            res = strptime(inputTime, "%y%m%d%H%M%S", &formattedTime);
-
-
-        // Free previously allocated input time string
-        free(inputTime);
-
-        if (NULL == res)
-        {
-            Send("501 Bad date/time argument");
+            Send("501 Bad date/time arguments");
         continue;
         }
-
-        // Convert struct tm to UNIX epoch timestamp
-        time_t checktime = mktime(&formattedTime);
-        if (-1 == checktime)
-        {
-            Send("501 Bad date/time argument");
-            continue;
-        }
-
-        // DEBUG : Log produced timestamp
-        std::stringstream stime;
-        stime << checktime;
-
-        G_conf.LogMessage(L_DEBUG, stime.str().c_str());
 
         // Check every groups
 	    vector<string> groupnames;
@@ -639,8 +653,11 @@ int Server::CommandLoop(const char *overview[])
         continue;
 	}
 
+    // TODO NEWNEWS
 	ISIT("NEWNEWS")				// RFC 977
 	{
+        // Syntax : NEWNEWS wildmat date time [GMT]
+        long checktime = ParseDate(arg2, arg3);
 	    Send("501 Command not implemented on server");	// TBD
 	    continue;
 	}
