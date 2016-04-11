@@ -556,22 +556,24 @@ int Server::CommandLoop(const char *overview[])
 		continue;
 	    }
 
-        // TODO Correct error occuring
+        // Parse date input
 	    int year, mon, day, hour, min, sec;
-	    if ( (sscanf(arg1, "%2d%2d%2d", &year, &mon, &day) != 3 ||
-	         sscanf(arg1, "%4d%2d%2d", &year, &mon, &day) != 3) ||
-	         sscanf(arg2, "%2d%2d%2d", &hour, &min, &sec) != 3 )
-	    {
-	        Send("501 Bad date/time argument");
-		continue;
-	    }
-
-	    // TBD
-	    //     1) TRANSLATE YY -> YYYY - NOT MANDATORY, CHECK `man 3 strptime`
-        //        FOR MORE INFORMATION ('%y' FORMAT PARAMETER)
-	    //     2) TRANSLATE TIMES INTO A time() VALUE
-	    //     3) COMPARE TIME TO GROUP'S CTIME
-	    //
+        if (strlen(arg1) == 6) {
+            if ( sscanf(arg1, "%2d%2d%2d", &year, &mon, &day) != 3 ||
+                 sscanf(arg2, "%2d%2d%2d", &hour, &min, &sec) != 3 )
+            {
+                Send("501 Bad date/time argument");
+            continue;
+            }
+        }
+        else {
+            if ( sscanf(arg1, "%4d%2d%2d", &year, &mon, &day) != 3 ||
+                 sscanf(arg2, "%2d%2d%2d", &hour, &min, &sec) != 3 )
+            {
+                Send("501 Bad date/time argument");
+            continue;
+            }
+        }
 
         // Get time input
         char *inputTime = (char *) malloc(14 * sizeof (char));
