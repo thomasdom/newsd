@@ -28,6 +28,9 @@
 #define ISIT(x)		if (!strcasecmp(cmd, x))
 #define ISHEAD(a)	(strncasecmp(head, (a), strlen(a))==0)
 
+#define TIME_GMT 1
+#define TIME_LOCAL 0
+
 // SENDS CRLF TERMINATED MESSAGE TO REMOTE
 int Server::Send(const char *msg)
 {
@@ -105,7 +108,7 @@ void BreakLineToFP(FILE *fp,
     }
 }
 
-long ParseDate(const char *date, const char *time)
+long ParseDate(const char *date, const char *time, int gmt)
 {
     // Log arguments to debug console
     char logMessage[LINE_LEN];
@@ -160,11 +163,17 @@ long ParseDate(const char *date, const char *time)
         return -1L;
     }
 
-    // Convert struct tm to UNIX epoch timestamp
-    time_t checktime = mktime(&formattedTime);
+    // Convert struct tm to UNIX [GMT] epoch timestamp
+    time_t checktime;
+
+    if (TIME_GMT == gmt)
+        checktime = timegm(&formattedTime);
+    else
+        checktime = mktime(&formattedTime);
+
     if (-1 == checktime)
     {
-        G_conf.LogMessage(L_DEBUG, "[ERROR] ParseDate: mktime() failed");
+        G_conf.LogMessage(L_DEBUG, "[ERROR] ParseDate: mktime() or gmtime() failed");
         return -1L;
     }
 
@@ -175,7 +184,7 @@ long ParseDate(const char *date, const char *time)
     return checktime;
 }
 
-long ParseArticleDate(const char *articleDate)
+long ParseArticleDate(const char *articleDate, int gmt)
 {
 	// Log arguments to debug console
 	char logMessage[LINE_LEN];
@@ -196,10 +205,16 @@ long ParseArticleDate(const char *articleDate)
 	}
 
 	// Convert struct tm to UNIX epoch timestamp
-	time_t checktime = mktime(&formattedTime);
+	time_t checktime;
+
+    if (TIME_GMT == gmt)
+        checktime = timegm(&formattedTime);
+    else
+        checktime = mktime(&formattedTime);
+
 	if (-1 == checktime)
 	{
-		G_conf.LogMessage(L_DEBUG, "[ERROR] ParseArticleDate: mktime() failed");
+		G_conf.LogMessage(L_DEBUG, "[ERROR] ParseArticleDate: mktime() or gmtime() failed");
 		return -1L;
 	}
 
@@ -296,6 +311,7 @@ int Server::CommandLoop(const char *overview[])
 	 arg1[LINE_LEN+1],
 	 arg2[LINE_LEN+1],
 	 arg3[LINE_LEN+1],
+	 arg4[LINE_LEN+1],
 	 reply[LINE_LEN];
 
     Send("200 newsd news server ready - posting ok");
@@ -333,8 +349,8 @@ int Server::CommandLoop(const char *overview[])
 
 	G_conf.LogMessage(L_INFO, "GOT: %s", s);
 
-	arg1[0] = arg2[0] = arg3[0] = 0;
-	if ( sscanf(s, "%s%s%s%s", cmd, arg1, arg2, arg3) < 1 )
+	arg1[0] = arg2[0] = arg3[0] = arg4[0] = 0;
+	if ( sscanf(s, "%s%s%s%s%s", cmd, arg1, arg2, arg3, arg4) < 1 )
 	    { continue; }
 
 	ISIT("CHECK")			// TRANSPORT EXTENSION -- RFC 2980
@@ -664,7 +680,19 @@ int Server::CommandLoop(const char *overview[])
 	    }
 
         // Parse date input
-	    long checktime = ParseDate(arg1, arg2);
+	    long checktime;
+
+        if (0 == strcmp("GMT", arg3))
+            checktime = ParseDate(arg1, arg2, TIME_GMT);
+        else if (0 == strlen(arg3))
+            checktime = ParseDate(arg1, arg2, TIME_LOCAL);
+        else
+        {
+            Send("501 Bad timezone option: must be GMT or none");
+            continue;
+        }
+
+
         if (-1L == checktime)
         {
             Send("501 Bad date/time arguments");
@@ -702,8 +730,16 @@ int Server::CommandLoop(const char *overview[])
         vector<string> groupnames, checkgroupnames, newarticles;
         long checktime;
 
-        // Parse input date
-        checktime = ParseDate(arg2, arg3);
+        // Parse date input
+        if (0 == strcmp("GMT", arg4))
+            checktime = ParseDate(arg2, arg3, TIME_GMT);
+        else if (0 == strlen(arg4))
+            checktime = ParseDate(arg2, arg3, TIME_LOCAL);
+        else
+        {
+            Send("501 Bad timezone option: must be GMT or none");
+            continue;
+        }
 
         // Fetch all group names
         AllGroups(groupnames, NULL);
@@ -733,7 +769,9 @@ int Server::CommandLoop(const char *overview[])
 
                 // Get all new articles from selected group
                 // TODO parse article date
-                while (art.Number() <= tgroup.End() && ParseArticleDate(art.Date()) > checktime)
+                while (art.Number() <= tgroup.End() &&
+                        (0 == strcmp("GMT", arg4) ? ParseArticleDate(art.Date(), TIME_GMT) :
+                         ParseArticleDate(art.Date(), TIME_LOCAL)) > checktime)
                 {
                     newarticles.push_back(string(art.MessageID()));
                     unsigned long i = art.Number() + 1;
