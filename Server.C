@@ -21,6 +21,7 @@
 
 #include "Server.H"
 #include <dirent.h>
+#include <fnmatch.h>
 
 
 // Convenience macros...
@@ -172,6 +173,41 @@ long ParseDate(const char *date, const char *time)
     G_conf.LogMessage(L_DEBUG, logMessage);
 
     return checktime;
+}
+
+long ParseArticleDate(const char *articleDate)
+{
+	// Log arguments to debug console
+	char logMessage[LINE_LEN];
+
+	sprintf(logMessage, (char *) "[DEBUG] ParseArticleDate: got %s", articleDate);
+	G_conf.LogMessage(L_DEBUG, logMessage);
+
+	// convert input time to time() compatible value
+	struct tm formattedTime;
+	memset(&formattedTime, 0, sizeof(struct tm));
+
+	char *res = strptime(articleDate, "%a, %d %b %Y %T %z", &formattedTime);
+
+	if (NULL == res)
+	{
+		G_conf.LogMessage(L_DEBUG, "[ERROR] ParseArticleDate: strptime() failed");
+		return -1L;
+	}
+
+	// Convert struct tm to UNIX epoch timestamp
+	time_t checktime = mktime(&formattedTime);
+	if (-1 == checktime)
+	{
+		G_conf.LogMessage(L_DEBUG, "[ERROR] ParseArticleDate: mktime() failed");
+		return -1L;
+	}
+
+	// DEBUG : Log produced timestamp
+	sprintf(logMessage, (char *) "[SUCCESS] ParseArticleDate: parsed timestamp - %ld", checktime);
+	G_conf.LogMessage(L_DEBUG, logMessage);
+
+	return checktime;
 }
 
 void AllGroups(vector<string>& groupnames, const char *subdir)
@@ -657,9 +693,69 @@ int Server::CommandLoop(const char *overview[])
 	ISIT("NEWNEWS")				// RFC 977
 	{
         // Syntax : NEWNEWS wildmat date time [GMT]
-        long checktime = ParseDate(arg2, arg3);
-	    Send("501 Command not implemented on server");	// TBD
-	    continue;
+        if ( (strlen(arg2) != 6 && strlen(arg2) != 8) || strlen(arg3) != 6 )
+        {
+            Send("501 Bad or missing arguments");
+            continue;
+        }
+
+        vector<string> groupnames, checkgroupnames, newarticles;
+        long checktime;
+
+        // Parse input date
+        checktime = ParseDate(arg2, arg3);
+
+        // Fetch all group names
+        AllGroups(groupnames, NULL);
+
+        // Get all group names matching wildcard
+        for ( unsigned t = 0; t < groupnames.size(); t++ )
+        {
+            if (0 == fnmatch(arg1, groupnames[t].c_str(), 0))
+                checkgroupnames.push_back(groupnames[t]);
+        }
+
+        // Get new articles from matched groups
+        if (checkgroupnames.size() > 0)
+        {
+            G_conf.LogMessage(L_DEBUG, "NEWNEWS - Groupname size > 0");
+            for ( unsigned t = 0; t < checkgroupnames.size(); t++ )
+            {
+                // Load group
+                Group tgroup;
+                if ( tgroup.Load(checkgroupnames[t].c_str()) < 0 )
+                { continue; }
+
+                // Load last article
+                Article art;
+                if ( art.Load(tgroup.Name(), tgroup.Start()) < 0)
+                { continue; }
+
+                // Get all new articles from selected group
+                // TODO parse article date
+                while (art.Number() <= tgroup.End() && ParseArticleDate(art.Date()) > checktime)
+                {
+                    newarticles.push_back(string(art.MessageID()));
+                    unsigned long i = art.Number() + 1;
+                    while (art.Load(tgroup.Name(), i) < 0 && art.Number() <= tgroup.End())
+                    { i++; }
+                }
+
+            }
+        }
+        else {
+            G_conf.LogMessage(L_DEBUG, "NEWNEWS - No group match found");
+        }
+
+        Send("231 list of new articles by message-id follows");
+
+        for ( unsigned t=0; t < newarticles.size(); t++ )
+        {
+            Send(newarticles[t].c_str());
+        }
+
+        Send(".");		// for now, nothing matches
+        continue;
 	}
 
 	ISIT("NEXT")				// RFC 977
